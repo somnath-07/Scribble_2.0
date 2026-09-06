@@ -116,4 +116,5 @@ export interface StoredRoomState {
   game: StoredGameState;
   chat: ChatMessage[];
   bannedPlayerIds: string[];
+  activeSessionIds: Record<string, string>;
 }

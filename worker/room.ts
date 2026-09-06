@@ -79,6 +79,7 @@ export class RoomDurableObject extends DurableObject<Env> {
     super(ctx, env);
     this.ready = this.ctx.blockConcurrencyWhile(async () => {
       this.room = (await this.ctx.storage.get<StoredRoomState>(ROOM_STORAGE_KEY)) ?? null;
+      if (this.room && !this.room.activeSessionIds) this.room.activeSessionIds = {};
       this.nextAlarmAt = await this.ctx.storage.getAlarm();
     });
   }
@@ -137,6 +138,7 @@ export class RoomDurableObject extends DurableObject<Env> {
       game: newGameState(),
       chat: [],
       bannedPlayerIds: [],
+      activeSessionIds: {},
     };
     await this.save();
     await this.scheduleAlarm(now + RECONNECT_GRACE_MS);
@@ -170,12 +172,8 @@ export class RoomDurableObject extends DurableObject<Env> {
     const attachment = socket.deserializeAttachment() as SocketAttachment | null;
     const playerId = attachment?.playerId;
     if (!playerId || !this.room.players[playerId]) return;
-    const anotherSession = this.ctx.getWebSockets().some((candidate) => {
-      if (candidate === socket || !socketIsOpen(candidate)) return false;
-      const candidateAttachment = candidate.deserializeAttachment() as SocketAttachment | null;
-      return candidateAttachment?.playerId === playerId;
-    });
-    if (anotherSession) return;
+    if (!attachment || this.room.activeSessionIds[playerId] !== attachment.sessionId) return;
+    delete this.room.activeSessionIds[playerId];
     const now = Date.now();
     this.room.players[playerId].connected = false;
     this.room.players[playerId].disconnectedAt = now;
@@ -265,6 +263,9 @@ export class RoomDurableObject extends DurableObject<Env> {
 
     const now = Date.now();
     const oldSockets = this.socketsFor(profile.id);
+    const nextAttachment: SocketAttachment = { playerId: profile.id, sessionId: attachment?.sessionId ?? crypto.randomUUID() };
+    socket.serializeAttachment(nextAttachment);
+    this.room.activeSessionIds[profile.id] = nextAttachment.sessionId;
     for (const oldSocket of oldSockets) this.close(oldSocket, 4001, 'Reconnected elsewhere');
     const player = existing
       ? { ...restorePlayer(existing, safeName(profile.name), now), avatar: profile.avatar }
@@ -279,8 +280,6 @@ export class RoomDurableObject extends DurableObject<Env> {
           spectator: this.room.game.phase !== 'WAITING',
         } satisfies Player;
     this.room.players[profile.id] = player;
-    const nextAttachment: SocketAttachment = { playerId: profile.id, sessionId: attachment?.sessionId ?? crypto.randomUUID() };
-    socket.serializeAttachment(nextAttachment);
     this.room.lastActivityAt = now;
     if (!existing) this.addSystemMessage(`${player.name} joined the room.`);
     await this.save();

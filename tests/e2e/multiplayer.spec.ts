@@ -26,7 +26,7 @@ async function chooseDrawer(pageA: Page, pageB: Page): Promise<{ drawer: Page; g
   await expect(choice).toBeVisible();
   const word = (await choice.textContent())!.trim();
   await choice.click();
-  await expect(drawer.getByTestId('drawing-canvas')).toBeVisible();
+  await expect(drawer.getByLabel('Drawing canvas. Use mouse, touch, or stylus to draw.')).toBeVisible();
   await expect(guesser.getByTestId('word-display')).not.toHaveText(word.toUpperCase());
   return { drawer, guesser, word };
 }
