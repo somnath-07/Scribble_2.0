@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnp/
+
+# Secrets and local configuration
+.env*
+!.env.example
+.dev.vars
+.dev.vars.*
+*.pem
+*.key
+*.p12
+credentials*.json
+
+# Build and Cloudflare state
+dist/
+.wrangler/
+.vinext/
+.next/
+out/
+
+# Test artifacts
+coverage/
+test-results/
+playwright-report/
+blob-report/
+
+# Logs and editor files
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Sites workspace output
+outputs/
+work/
