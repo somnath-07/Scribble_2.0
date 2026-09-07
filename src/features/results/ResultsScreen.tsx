@@ -5,7 +5,6 @@ import { Avatar } from '../../components/Avatar';
 
 export function ResultsScreen({ room, selfId, send }: { room: RoomView; selfId: string; send: (message: ClientMessage) => boolean }) {
   const sorted = [...room.players].sort((a, b) => b.score - a.score || a.joinedAt - b.joinedAt);
-  const medals = ['🥇', '🥈', '🥉'];
   const isHost = room.hostId === selfId;
   return (
     <main className="results-page room-page">
@@ -18,7 +17,7 @@ export function ResultsScreen({ room, selfId, send }: { room: RoomView; selfId: 
           {[1, 0, 2].map((rank) => {
             const player = sorted[rank];
             if (!player) return <div key={rank} />;
-            return <div key={player.id} className={`podium-place place-${rank + 1}`}><span className="medal">{medals[rank]}</span><Avatar avatar={player.avatar} size={rank === 0 ? 82 : 66} /><strong>{player.name}</strong><span>{player.score} pts</span><i>{rank + 1}</i></div>;
+            return <div key={player.id} className={`podium-place place-${rank + 1}`}><span className="medal">#{rank + 1}</span><Avatar avatar={player.avatar} size={rank === 0 ? 82 : 66} /><strong>{player.name}</strong><span>{player.score} pts</span><i>{rank + 1}</i></div>;
           })}
         </div>
         <ol className="final-list">

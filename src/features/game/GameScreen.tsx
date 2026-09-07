@@ -1,7 +1,8 @@
-import { Clock3, Crown, Eye, Volume2, VolumeX } from 'lucide-react';
+import { Clock3, Crown, Eye, PencilLine, Volume2, VolumeX } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { PrivateGameView, RoomView } from '../../../shared/game-types';
 import type { ClientMessage } from '../../../shared/protocol';
+import { GameLogo } from '../../components/GameLogo';
 import { CanvasBoard } from '../canvas/CanvasBoard';
 import { DrawingTools } from '../canvas/DrawingTools';
 import { ChatPanel } from '../chat/ChatPanel';
@@ -57,6 +58,7 @@ export function GameScreen({ room, privateView, selfId, send, muted, onToggleSou
 
   return (
     <main className="game-page room-page">
+      <div className="game-brandline"><GameLogo compact /></div>
       <header className="game-topbar">
         <div className="round-label"><span>Round</span><strong>{room.game.currentRound} <small>of {room.game.totalRounds}</small></strong></div>
         <div className={`timer ${remaining <= 10 && room.game.phase === 'DRAWING' ? 'urgent' : ''}`}><Clock3 /><strong>00:{String(remaining).padStart(2, '0')}</strong></div>
@@ -74,7 +76,7 @@ export function GameScreen({ room, privateView, selfId, send, muted, onToggleSou
         </section>
         <ChatPanel messages={room.chat} selfId={selfId} mutedPlayers={mutedPlayers} disabled={isDrawer || room.game.phase !== 'DRAWING'} solved={Boolean(self?.hasGuessed)} onSend={(text) => send({ type: 'chat:message', payload: { text } })} />
       </div>
-      {room.game.phase === 'WORD_SELECTION' && <div className="phase-overlay" data-testid="word-selection"><div className="phase-card panel">{isDrawer ? <><p className="eyebrow">You’re up!</p><h2>Choose a word</h2><p>Pick one before the timer runs out.</p><div className="word-choices">{privateView.wordChoices?.map((word) => <button key={word} data-testid="word-choice" onClick={() => send({ type: 'word:select', payload: { word } })}>{word}</button>)}</div></> : <><div className="choosing-pencil">✎</div><p className="eyebrow">Next artist</p><h2>{drawer?.name ?? 'Someone'} is choosing a word…</h2><p>The canvas will open in a moment.</p></>}</div></div>}
+      {room.game.phase === 'WORD_SELECTION' && <div className="phase-overlay" data-testid="word-selection"><div className="phase-card panel">{isDrawer ? <><p className="eyebrow">You’re up!</p><h2>Choose a word</h2><p>Pick one before the timer runs out.</p><div className="word-choices">{privateView.wordChoices?.map((word) => <button key={word} data-testid="word-choice" onClick={() => send({ type: 'word:select', payload: { word } })}>{word}</button>)}</div></> : <><div className="choosing-pencil"><PencilLine /></div><p className="eyebrow">Next artist</p><h2>{drawer?.name ?? 'Someone'} is choosing a word…</h2><p>The canvas will open in a moment.</p></>}</div></div>}
       {room.game.phase === 'TURN_RESULTS' && <div className="phase-overlay"><div className="phase-card panel"><p className="eyebrow">Time’s up</p><h2>The word was</h2><div className="revealed-word">{room.game.lastWord}</div><p>Next turn starts soon…</p></div></div>}
       {self?.spectator && <div className="spectator-pill"><Eye size={16} /> You joined mid-game and are spectating until the next game.</div>}
     </main>

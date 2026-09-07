@@ -1,8 +1,9 @@
-import { Check, Clipboard, Crown, LockKeyhole, Play, Settings2, Users } from 'lucide-react';
+import { Check, Clipboard, Crown, LockKeyhole, PencilLine, Play, Settings2, Users } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { DRAW_TIMES } from '../../../shared/constants';
 import type { RoomSettings, RoomView } from '../../../shared/game-types';
 import type { ClientMessage } from '../../../shared/protocol';
+import { GameLogo } from '../../components/GameLogo';
 import { PlayerList } from '../players/PlayerList';
 
 interface Props {
@@ -32,7 +33,7 @@ export function LobbyScreen({ room, selfId, send, mutedPlayers, onMute }: Props)
   return (
     <main className="room-page lobby-page">
       <header className="room-header">
-        <div className="mini-brand"><span className="brand-mark"><i /><i /><i /></span> Scribble 2</div>
+        <GameLogo compact />
         <div className="room-code"><LockKeyhole size={15} /> Private room <strong>{room.roomId}</strong></div>
       </header>
       <div className="lobby-grid">
@@ -58,7 +59,7 @@ export function LobbyScreen({ room, selfId, send, mutedPlayers, onMute }: Props)
         <aside className="panel lobby-players">
           <div className="panel-title"><div><p className="eyebrow">Lobby</p><h2><Users /> Players</h2></div><span className="count-chip">{connectedPlayers}/{room.settings.playerLimit}</span></div>
           <PlayerList players={room.players} hostId={room.hostId} selfId={selfId} isHost={isHost} mutedPlayers={mutedPlayers} onMute={onMute} onKick={(playerId) => send({ type: 'player:kick', payload: { playerId } })} />
-          {connectedPlayers < 2 && <div className="waiting-illustration"><div className="orbit"><span>✎</span></div><strong>Waiting for one more friend</strong><small>Share the invite below to get started.</small></div>}
+          {connectedPlayers < 2 && <div className="waiting-illustration"><div className="orbit"><PencilLine /></div><strong>Waiting for one more friend</strong><small>Share the invite below to get started.</small></div>}
         </aside>
       </div>
       <footer className="invite-bar">
