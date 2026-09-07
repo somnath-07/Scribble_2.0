@@ -1,4 +1,4 @@
-import { Crown, MicOff, UserRoundX, WifiOff } from 'lucide-react';
+import { Crown, MicOff, Pencil, UserRoundX, WifiOff } from 'lucide-react';
 import type { Player } from '../../../shared/game-types';
 import { Avatar } from '../../components/Avatar';
 
@@ -11,16 +11,22 @@ interface Props {
   mutedPlayers: Set<string>;
   onKick?: (id: string) => void;
   onMute?: (id: string) => void;
+  onCustomizeSelf?: () => void;
 }
 
-export function PlayerList({ players, hostId, selfId, currentDrawerId, isHost, mutedPlayers, onKick, onMute }: Props) {
+export function PlayerList({ players, hostId, selfId, currentDrawerId, isHost, mutedPlayers, onKick, onMute, onCustomizeSelf }: Props) {
   const sorted = [...players].sort((a, b) => b.score - a.score || a.joinedAt - b.joinedAt);
   return (
     <ol className="player-list" aria-label="Players">
       {sorted.map((player, index) => (
         <li key={player.id} className={`player-row ${player.id === currentDrawerId ? 'drawing' : ''} ${player.hasGuessed ? 'guessed' : ''} ${!player.connected ? 'offline' : ''}`} data-testid={`player-${player.name}`}>
           <span className="rank">#{index + 1}</span>
-          <Avatar avatar={player.avatar} size={44} label={`${player.name}'s avatar`} />
+          {player.id === selfId && onCustomizeSelf ? (
+            <button className="player-avatar-button" type="button" aria-label="Customize your avatar" onClick={onCustomizeSelf}>
+              <Avatar avatar={player.avatar} size={44} label={`${player.name}'s avatar`} />
+              <span><Pencil size={11} /></span>
+            </button>
+          ) : <Avatar avatar={player.avatar} size={44} label={`${player.name}'s avatar`} />}
           <span className="player-meta">
             <strong>{player.name}{player.id === selfId ? ' (you)' : ''}</strong>
             <small>{player.spectator ? 'Spectating' : player.id === currentDrawerId ? 'Drawing now' : player.hasGuessed ? 'Guessed it!' : player.connected ? 'Ready' : 'Reconnecting'}</small>

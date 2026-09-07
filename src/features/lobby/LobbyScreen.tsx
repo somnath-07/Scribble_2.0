@@ -1,9 +1,11 @@
-import { Check, Clipboard, Crown, LockKeyhole, PencilLine, Play, Settings2, Users } from 'lucide-react';
+import { Check, Clipboard, Crown, LockKeyhole, Palette, PencilLine, Play, Settings2, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { DRAW_TIMES } from '../../../shared/constants';
-import type { RoomSettings, RoomView } from '../../../shared/game-types';
+import type { AvatarConfig, RoomSettings, RoomView } from '../../../shared/game-types';
 import type { ClientMessage } from '../../../shared/protocol';
+import { AvatarCustomizer } from '../../components/AvatarCustomizer';
 import { GameLogo } from '../../components/GameLogo';
+import { saveProfile } from '../../lib/profile';
 import { PlayerList } from '../players/PlayerList';
 
 interface Props {
@@ -18,8 +20,22 @@ export function LobbyScreen({ room, selfId, send, mutedPlayers, onMute }: Props)
   const isHost = room.hostId === selfId;
   const [copied, setCopied] = useState(false);
   const [customWords, setCustomWords] = useState(room.settings.customWords.join(', '));
+  const self = room.players.find((player) => player.id === selfId);
+  const [avatarEditorOpen, setAvatarEditorOpen] = useState(false);
+  const [avatarDraft, setAvatarDraft] = useState<AvatarConfig>(self?.avatar ?? { body: '#bfdbfe', eyes: 0, mouth: 0, accessory: 0 });
   const inviteUrl = `${window.location.origin}/room/${room.roomId}`;
   useEffect(() => setCustomWords(room.settings.customWords.join(', ')), [room.settings.customWords]);
+  useEffect(() => {
+    if (!avatarEditorOpen && self) setAvatarDraft(self.avatar);
+  }, [avatarEditorOpen, self]);
+  useEffect(() => {
+    if (!avatarEditorOpen) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAvatarEditorOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [avatarEditorOpen]);
 
   const update = (patch: Partial<RoomSettings>) => send({ type: 'room:update-settings', payload: { ...room.settings, ...patch } });
   const parseCustom = () => update({ customWords: customWords.split(/[\n,]/).map((word) => word.trim()).filter(Boolean) });
@@ -29,15 +45,27 @@ export function LobbyScreen({ room, selfId, send, mutedPlayers, onMute }: Props)
     window.setTimeout(() => setCopied(false), 1_800);
   };
   const connectedPlayers = room.players.filter((player) => player.connected).length;
+  const openAvatarEditor = () => {
+    if (self) setAvatarDraft(self.avatar);
+    setAvatarEditorOpen(true);
+  };
+  const applyAvatar = () => {
+    if (!self) return;
+    const wasSent = send({ type: 'player:update', payload: { name: self.name, avatar: avatarDraft } });
+    if (!wasSent) return;
+    saveProfile(self.name, avatarDraft, self.id);
+    setAvatarEditorOpen(false);
+  };
 
   return (
     <main className="room-page lobby-page">
       <header className="room-header">
         <GameLogo compact />
-        <div className="room-code"><LockKeyhole size={15} /> Private room <strong>{room.roomId}</strong></div>
+        <div className="lobby-status" aria-label="Lobby status"><span>Waiting</span><strong>{connectedPlayers}/{room.settings.playerLimit}</strong></div>
+        <div className="room-code"><LockKeyhole size={15} /><span>Private room</span><strong>{room.roomId}</strong></div>
       </header>
       <div className="lobby-grid">
-        <section className="panel settings-panel">
+        <section className="panel settings-panel" id="game-settings">
           <div className="panel-title"><div><p className="eyebrow">Host controls</p><h1><Settings2 /> Game settings</h1></div>{isHost && <span className="host-chip"><Crown size={14} /> You’re host</span>}</div>
           {!isHost && <div className="waiting-banner">The host is setting things up. Changes appear here live.</div>}
           <div className="settings-grid">
@@ -57,8 +85,11 @@ export function LobbyScreen({ room, selfId, send, mutedPlayers, onMute }: Props)
           <label className="check-row"><input type="checkbox" disabled={!isHost} checked={room.settings.customWordsOnly} onChange={(event) => update({ customWordsOnly: event.target.checked })} /> Use custom words only</label>
         </section>
         <aside className="panel lobby-players">
-          <div className="panel-title"><div><p className="eyebrow">Lobby</p><h2><Users /> Players</h2></div><span className="count-chip">{connectedPlayers}/{room.settings.playerLimit}</span></div>
-          <PlayerList players={room.players} hostId={room.hostId} selfId={selfId} isHost={isHost} mutedPlayers={mutedPlayers} onMute={onMute} onKick={(playerId) => send({ type: 'player:kick', payload: { playerId } })} />
+          <div className="panel-title">
+            <div><p className="eyebrow">Lobby</p><h2><Users /> Players</h2></div>
+            <button className="customize-avatar-button" type="button" data-testid="customize-avatar" onClick={openAvatarEditor}><Palette size={16} /> Customize</button>
+          </div>
+          <PlayerList players={room.players} hostId={room.hostId} selfId={selfId} isHost={isHost} mutedPlayers={mutedPlayers} onMute={onMute} onKick={(playerId) => send({ type: 'player:kick', payload: { playerId } })} onCustomizeSelf={openAvatarEditor} />
           {connectedPlayers < 2 && <div className="waiting-illustration"><div className="orbit"><PencilLine /></div><strong>Waiting for one more friend</strong><small>Share the invite below to get started.</small></div>}
         </aside>
       </div>
@@ -67,6 +98,21 @@ export function LobbyScreen({ room, selfId, send, mutedPlayers, onMute }: Props)
         <button className="secondary-button" onClick={copy}>{copied ? <Check size={18} /> : <Clipboard size={18} />} {copied ? 'Copied!' : 'Copy link'}</button>
         {isHost ? <button className="primary-button start-button" data-testid="start-game" disabled={connectedPlayers < 2} onClick={() => send({ type: 'game:start' })}><Play size={19} fill="currentColor" /> Start game</button> : <div className="waiting-host">Waiting for host…</div>}
       </footer>
+      {avatarEditorOpen && (
+        <div className="avatar-editor-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAvatarEditorOpen(false); }}>
+          <section className="avatar-editor-card" role="dialog" aria-modal="true" aria-labelledby="avatar-editor-title" data-testid="avatar-editor">
+            <header>
+              <div><p className="eyebrow">Player look</p><h2 id="avatar-editor-title">Customize your avatar</h2></div>
+              <button className="icon-button" type="button" aria-label="Close avatar editor" onClick={() => setAvatarEditorOpen(false)}><X size={19} /></button>
+            </header>
+            <AvatarCustomizer value={avatarDraft} onChange={setAvatarDraft} />
+            <div className="avatar-editor-actions">
+              <button className="secondary-button" type="button" onClick={() => setAvatarEditorOpen(false)}>Cancel</button>
+              <button className="primary-button" type="button" data-testid="apply-avatar" onClick={applyAvatar}><Check size={18} /> Use this avatar</button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

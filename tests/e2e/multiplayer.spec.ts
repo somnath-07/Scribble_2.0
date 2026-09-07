@@ -52,6 +52,29 @@ async function canvasHasInk(page: Page): Promise<boolean> {
 
 test.beforeAll(async () => mkdir(screenshots, { recursive: true }));
 
+test('player can customize their avatar from the mobile lobby and everyone sees it', async ({ browser }) => {
+  const hostContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const host = await hostContext.newPage();
+  await host.goto('/');
+  await profileOnHome(host, 'Avatar Host');
+  await host.getByTestId('create-room').click();
+  await expect(host).toHaveURL(/\/room\/[A-Z0-9]{8}$/);
+  await host.getByTestId('customize-avatar').click();
+  await expect(host.getByTestId('avatar-editor')).toBeVisible();
+  await host.getByLabel('Use body color #7c4a2d').click();
+  await host.getByRole('button', { name: 'Accessory' }).click();
+  await host.screenshot({ path: `${screenshots}/lobby-avatar-customizer.png`, fullPage: true });
+  await host.getByTestId('apply-avatar').click();
+  await expect(host.getByTestId('avatar-editor')).toBeHidden();
+  await expect(host.getByTestId('player-Avatar Host').locator('circle[fill="#7c4a2d"]')).toBeVisible();
+
+  const guest = await joinInvite(browser, host.url(), 'Avatar Guest');
+  await expect(guest.page.getByTestId('player-Avatar Host').locator('circle[fill="#7c4a2d"]')).toBeVisible();
+  await host.screenshot({ path: `${screenshots}/lobby-mobile.png`, fullPage: true });
+  await guest.context.close();
+  await hostContext.close();
+});
+
 test('two isolated players complete a synchronized game and play again', async ({ browser, page }) => {
   const errors: string[] = [];
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
