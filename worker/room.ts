@@ -4,7 +4,9 @@ import {
   DRAWER_RECONNECT_GRACE_MS,
   EMPTY_ROOM_TTL_MS,
   MAX_SOCKET_MESSAGE_BYTES,
+  MAX_ROOM_IDENTITIES,
   RECONNECT_GRACE_MS,
+  SOCKET_IDLE_TIMEOUT_MS,
   TURN_RESULTS_MS,
   WORD_SELECTION_MS,
 } from '../shared/constants';
@@ -25,7 +27,6 @@ import {
   getHintRevealOrder,
   isCloseGuess,
   maskWord,
-  migrateHost,
   normalizeGuess,
   progressTurn,
   restorePlayer,
@@ -36,6 +37,7 @@ import {
 import type { Env, SocketAttachment } from './types';
 import { parseClientMessage } from './validation';
 import { BUILT_IN_WORDS, getWordPool } from './words';
+import { pauseEmptyRoom, resumeRoom, roomHasExpired, transferAbsentHost } from './room-lifecycle';
 
 const ROOM_STORAGE_KEY = 'room';
 
@@ -48,11 +50,17 @@ function newGameState(): StoredGameState {
     totalTurns: 0,
     currentDrawerId: null,
     phaseEndsAt: null,
+    pausedAt: null,
     maskedWord: '',
     drawingOrder: [],
     correctGuesserIds: [],
     canvasCommands: [],
     lastWord: null,
+    winnerId: null,
+    drawingLikes: 0,
+    drawingDislikes: 0,
+    drawingVotes: {},
+    leftPlayerIds: [],
     selectedWord: null,
     wordChoices: [],
     revealedIndices: [],
@@ -77,9 +85,19 @@ export class RoomDurableObject extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
     this.ready = this.ctx.blockConcurrencyWhile(async () => {
       this.room = (await this.ctx.storage.get<StoredRoomState>(ROOM_STORAGE_KEY)) ?? null;
-      if (this.room && !this.room.activeSessionIds) this.room.activeSessionIds = {};
+      if (this.room) {
+        this.room.activeSessionIds ??= {};
+        this.room.playerTokens ??= {};
+        this.room.game.pausedAt ??= null;
+        this.room.game.winnerId ??= null;
+        this.room.game.drawingVotes ??= {};
+        this.room.game.leftPlayerIds ??= [];
+        this.room.emptySince ??= Object.values(this.room.players).some((player) => player.connected) ? null : this.room.lastActivityAt;
+        if (this.room.emptySince !== null) pauseEmptyRoom(this.room, this.room.emptySince);
+      }
       this.nextAlarmAt = await this.ctx.storage.getAlarm();
     });
   }
@@ -87,6 +105,7 @@ export class RoomDurableObject extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     await this.ready;
     const url = new URL(request.url);
+    if (this.room && roomHasExpired(this.room, Date.now())) await this.expireRoom();
 
     if (request.method === 'POST' && url.pathname.endsWith('/create')) {
       return this.createRoom(request);
@@ -100,12 +119,18 @@ export class RoomDurableObject extends DurableObject<Env> {
       }
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
-      const attachment: SocketAttachment = { playerId: null, sessionId: crypto.randomUUID() };
+      const attachment: SocketAttachment = { playerId: null, sessionId: crypto.randomUUID(), lastSeenAt: Date.now() };
       server.serializeAttachment(attachment);
       this.ctx.acceptWebSocket(server);
+      await this.scheduleAlarm(Date.now() + SOCKET_IDLE_TIMEOUT_MS);
       return new Response(null, { status: 101, webSocket: client });
     }
 
+    if (request.method === 'GET') {
+      return this.room
+        ? Response.json({ roomId: this.room.roomId, expiresAt: this.room.emptySince === null ? null : this.room.emptySince + EMPTY_ROOM_TTL_MS }, { headers: { 'cache-control': 'no-store' } })
+        : Response.json({ error: 'ROOM_NOT_FOUND' }, { status: 404, headers: { 'cache-control': 'no-store' } });
+    }
     return new Response('Not found', { status: 404 });
   }
 
@@ -118,7 +143,8 @@ export class RoomDurableObject extends DurableObject<Env> {
     const now = Date.now();
     const profile = parsed.payload;
     const player: Player = {
-      ...profile,
+      id: profile.id,
+      avatar: profile.avatar,
       name: safeName(profile.name),
       score: 0,
       connected: false,
@@ -139,34 +165,46 @@ export class RoomDurableObject extends DurableObject<Env> {
       chat: [],
       bannedPlayerIds: [],
       activeSessionIds: {},
+      playerTokens: { [profile.id]: profile.reconnectToken },
+      emptySince: now,
     };
     await this.save();
-    await this.scheduleAlarm(now + RECONNECT_GRACE_MS);
+    await this.scheduleAlarm(now + EMPTY_ROOM_TTL_MS);
     return Response.json({ roomId: this.room.roomId }, { status: 201 });
   }
 
   async webSocketMessage(socket: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     await this.ready;
     if (!this.room) return this.close(socket, 4404, 'Room not found');
+    if (roomHasExpired(this.room, Date.now())) {
+      await this.expireRoom();
+      return this.close(socket, 4404, 'Room expired');
+    }
     if (typeof raw !== 'string' || new TextEncoder().encode(raw).byteLength > MAX_SOCKET_MESSAGE_BYTES) {
       return this.error(socket, 'INVALID_MESSAGE', 'That message could not be read.');
     }
     const message = parseClientMessage(raw);
     if (!message) return this.error(socket, 'INVALID_MESSAGE', 'That action was not valid.');
     const attachment = socket.deserializeAttachment() as SocketAttachment | null;
+    if (attachment) {
+      attachment.lastSeenAt = Date.now();
+      socket.serializeAttachment(attachment);
+    }
     if (message.type === 'room:join') {
       await this.join(socket, attachment, message.payload);
       return;
     }
     const playerId = attachment?.playerId;
-    if (!playerId || !this.room.players[playerId]?.connected) {
+    if (!playerId || !this.room.players[playerId]?.connected || this.room.activeSessionIds[playerId] !== attachment?.sessionId) {
       return this.error(socket, 'NOT_JOINED', 'Join the room before doing that.');
     }
     this.room.lastActivityAt = Date.now();
     await this.handleMessage(socket, playerId, message);
   }
 
-  async webSocketClose(socket: WebSocket): Promise<void> {
+  async webSocketClose(socket: WebSocket, code = 1000, reason = 'Connection closed'): Promise<void> {
+    // Explicitly complete the close handshake for clients and forwarding runtimes.
+    this.close(socket, code === 1005 || code === 1006 ? 1000 : code, reason);
     await this.ready;
     if (!this.room) return;
     const attachment = socket.deserializeAttachment() as SocketAttachment | null;
@@ -178,6 +216,7 @@ export class RoomDurableObject extends DurableObject<Env> {
     this.room.players[playerId].connected = false;
     this.room.players[playerId].disconnectedAt = now;
     this.room.lastActivityAt = now;
+    pauseEmptyRoom(this.room, now);
     this.addSystemMessage(`${this.room.players[playerId].name} lost connection.`);
     await this.save();
     this.broadcast({ type: 'player:left', payload: { playerId, permanent: false } });
@@ -195,31 +234,38 @@ export class RoomDurableObject extends DurableObject<Env> {
     if (!this.room) return;
     const now = Date.now();
 
+    for (const socket of this.ctx.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() as SocketAttachment | null;
+      const seenAt = Math.max(attachment?.lastSeenAt ?? this.room.lastActivityAt, this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime() ?? 0);
+      if (now - seenAt >= SOCKET_IDLE_TIMEOUT_MS) {
+        this.close(socket, 1001, 'Connection timed out');
+        await this.webSocketClose(socket);
+      }
+    }
+    if (roomHasExpired(this.room, now)) {
+      await this.expireRoom();
+      return;
+    }
+
     if (this.drawingDirty) {
       this.drawingDirty = false;
       await this.save();
     }
 
-    let hostChanged = false;
-    for (const player of Object.values(this.room.players)) {
-      if (player.connected || player.disconnectedAt === null) continue;
-      if (now - player.disconnectedAt < RECONNECT_GRACE_MS) continue;
-      delete this.room.players[player.id];
-      this.room.game.eligiblePlayerIds = this.room.game.eligiblePlayerIds.filter((id) => id !== player.id);
-      if (player.id === this.room.hostId) {
-        const nextHost = migrateHost(this.room.players, player.id);
-        if (nextHost) {
-          this.room.hostId = nextHost;
-          hostChanged = true;
-        }
-      }
-      this.broadcast({ type: 'player:left', payload: { playerId: player.id, permanent: true } });
+    // Presence can expire; the player's score and identity must not.
+    const hostChanged = transferAbsentHost(this.room, now);
+    if (hostChanged) this.addSystemMessage(`${this.room.players[this.room.hostId].name} is now the host.`);
+    if (this.room.emptySince !== null) {
+      await this.save();
+      await this.scheduleNextAlarm();
+      return;
     }
 
     const game = this.room.game;
+    if (await this.finishIfOnlyPlayerRemains(now)) return;
     const drawer = game.currentDrawerId ? this.room.players[game.currentDrawerId] : null;
-    const drawerTimedOut = drawer && !drawer.connected && drawer.disconnectedAt !== null
-      && now - drawer.disconnectedAt >= DRAWER_RECONNECT_GRACE_MS;
+    const drawerTimedOut = !drawer || (!drawer.connected && drawer.disconnectedAt !== null
+      && now - drawer.disconnectedAt >= DRAWER_RECONNECT_GRACE_MS);
 
     if ((game.phase === 'WORD_SELECTION' || game.phase === 'DRAWING') && drawerTimedOut) {
       if (game.phase === 'DRAWING') await this.endTurn();
@@ -236,12 +282,6 @@ export class RoomDurableObject extends DurableObject<Env> {
       await this.advanceTurn();
     }
 
-    if (hostChanged) this.addSystemMessage(`${this.room.players[this.room.hostId]?.name ?? 'A player'} is now the host.`);
-    if (Object.values(this.room.players).every((player) => !player.connected) && now - this.room.lastActivityAt >= EMPTY_ROOM_TTL_MS) {
-      await this.ctx.storage.deleteAll();
-      this.room = null;
-      return;
-    }
     await this.save();
     this.broadcastState();
     await this.scheduleNextAlarm();
@@ -255,22 +295,28 @@ export class RoomDurableObject extends DurableObject<Env> {
       return this.close(socket, 4403, 'Kicked');
     }
     const existing = this.room.players[profile.id];
+    const expectedToken = this.room.playerTokens[profile.id];
+    if (expectedToken && expectedToken !== profile.reconnectToken) {
+      this.error(socket, 'INVALID_IDENTITY', 'This player belongs to another browser. Return using your original browser.');
+      return this.close(socket, 4401, 'Invalid identity');
+    }
     const connectedCount = Object.values(this.room.players).filter((player) => player.connected && player.id !== profile.id).length;
-    if (!existing && connectedCount >= this.room.settings.playerLimit) {
+    if (connectedCount >= this.room.settings.playerLimit || (!existing && Object.keys(this.room.players).length >= MAX_ROOM_IDENTITIES)) {
       this.error(socket, 'ROOM_FULL', 'This room is full.');
       return this.close(socket, 4409, 'Room full');
     }
 
     const now = Date.now();
     const oldSockets = this.socketsFor(profile.id);
-    const nextAttachment: SocketAttachment = { playerId: profile.id, sessionId: attachment?.sessionId ?? crypto.randomUUID() };
+    const nextAttachment: SocketAttachment = { playerId: profile.id, sessionId: attachment?.sessionId ?? crypto.randomUUID(), lastSeenAt: now };
     socket.serializeAttachment(nextAttachment);
     this.room.activeSessionIds[profile.id] = nextAttachment.sessionId;
     for (const oldSocket of oldSockets) this.close(oldSocket, 4001, 'Reconnected elsewhere');
     const player = existing
       ? { ...restorePlayer(existing, safeName(profile.name), now), avatar: profile.avatar }
       : {
-          ...profile,
+          id: profile.id,
+          avatar: profile.avatar,
           name: safeName(profile.name),
           score: 0,
           connected: true,
@@ -280,6 +326,10 @@ export class RoomDurableObject extends DurableObject<Env> {
           spectator: this.room.game.phase !== 'WAITING',
         } satisfies Player;
     this.room.players[profile.id] = player;
+    this.room.game.leftPlayerIds = this.room.game.leftPlayerIds.filter((id) => id !== profile.id);
+    this.room.playerTokens[profile.id] = profile.reconnectToken;
+    resumeRoom(this.room, now);
+    if (transferAbsentHost(this.room, now)) this.addSystemMessage(`${this.room.players[this.room.hostId].name} is now the host.`);
     this.room.lastActivityAt = now;
     if (!existing) this.addSystemMessage(`${player.name} joined the room.`);
     await this.save();
@@ -292,6 +342,17 @@ export class RoomDurableObject extends DurableObject<Env> {
     if (!this.room) return;
     const player = this.room.players[playerId];
     switch (message.type) {
+      case 'room:leave':
+        await this.leaveRoom(socket, playerId);
+        return;
+      case 'drawing:react': {
+        const game = this.room.game;
+        if (!['DRAWING', 'TURN_RESULTS'].includes(game.phase) || game.turnNumber !== message.payload.turnNumber) return this.error(socket, 'REACTION_CLOSED', 'That drawing is no longer open for reactions.');
+        if (game.currentDrawerId === playerId) return this.error(socket, 'OWN_DRAWING', 'You cannot rate your own drawing.');
+        if (message.payload.vote === null) delete game.drawingVotes[playerId];
+        else game.drawingVotes[playerId] = message.payload.vote;
+        break;
+      }
       case 'room:update-settings':
         if (playerId !== this.room.hostId) return this.error(socket, 'HOST_ONLY', 'Only the host can change settings.');
         if (this.room.game.phase !== 'WAITING') return this.error(socket, 'SETTINGS_LOCKED', 'Settings are locked during a game.');
@@ -408,6 +469,7 @@ export class RoomDurableObject extends DurableObject<Env> {
     game.correctGuesserIds = [];
     game.canvasCommands = [];
     game.lastWord = null;
+    game.drawingVotes = {};
     for (const player of Object.values(this.room.players)) player.hasGuessed = false;
     this.broadcast({ type: 'turn:choosing', payload: { drawerId } });
     if (game.turnNumber % game.drawingOrder.length === 0) this.broadcast({ type: 'round:started', payload: { round: game.currentRound } });
@@ -522,7 +584,7 @@ export class RoomDurableObject extends DurableObject<Env> {
         player.hasGuessed = true;
         game.correctGuesserIds.push(playerId);
         const drawer = game.currentDrawerId ? this.room.players[game.currentDrawerId] : null;
-        if (drawer?.connected) drawer.score += calculateDrawerScore(1);
+        if (drawer) drawer.score += calculateDrawerScore(1);
         const message = this.makeMessage(playerId, player.name, `${player.name} guessed the word!`, 'correct');
         this.pushChat(message);
         this.broadcast({ type: 'chat:message', payload: { message } });
@@ -560,12 +622,16 @@ export class RoomDurableObject extends DurableObject<Env> {
 
   private async kick(socket: WebSocket, actorId: string, targetId: string): Promise<void> {
     if (!this.room) return;
+    if (this.room.game.phase !== 'WAITING') return this.error(socket, 'KICK_LOCKED', 'Players can only be removed in the lobby, never during a game.');
     if (actorId !== this.room.hostId) return this.error(socket, 'HOST_ONLY', 'Only the host can remove a player.');
     if (targetId === actorId) return this.error(socket, 'INVALID_TARGET', 'The host cannot remove themselves.');
     const target = this.room.players[targetId];
     if (!target) return this.error(socket, 'PLAYER_NOT_FOUND', 'That player is no longer here.');
     this.room.bannedPlayerIds.push(targetId);
     delete this.room.players[targetId];
+    delete this.room.activeSessionIds[targetId];
+    delete this.room.playerTokens[targetId];
+    this.room.game.eligiblePlayerIds = this.room.game.eligiblePlayerIds.filter((id) => id !== targetId);
     this.addSystemMessage(`${target.name} was removed by the host.`);
     for (const targetSocket of this.socketsFor(targetId)) {
       this.send(targetSocket, { type: 'kicked', payload: { reason: 'The host removed you from this room.' } });
@@ -573,6 +639,7 @@ export class RoomDurableObject extends DurableObject<Env> {
     }
     await this.save();
     this.broadcastState();
+    await this.scheduleNextAlarm();
   }
 
   private roomView(): RoomView {
@@ -591,11 +658,15 @@ export class RoomDurableObject extends DurableObject<Env> {
         totalTurns: game.totalTurns,
         currentDrawerId: game.currentDrawerId,
         phaseEndsAt: game.phaseEndsAt,
+        pausedAt: game.pausedAt,
         maskedWord: game.maskedWord,
         drawingOrder: game.drawingOrder,
         correctGuesserIds: game.correctGuesserIds,
         canvasCommands: game.canvasCommands,
         lastWord: game.lastWord,
+        winnerId: game.winnerId,
+        drawingLikes: Object.values(game.drawingVotes).filter((vote) => vote === 'like').length,
+        drawingDislikes: Object.values(game.drawingVotes).filter((vote) => vote === 'dislike').length,
       },
       chat: this.room.chat,
       serverTime: Date.now(),
@@ -604,7 +675,7 @@ export class RoomDurableObject extends DurableObject<Env> {
 
   private stateMessage(playerId: string): ServerMessage {
     if (!this.room) throw new Error('Room unavailable');
-    const privateView: { selectedWord?: string; wordChoices?: string[] } = {};
+    const privateView: { selectedWord?: string; wordChoices?: string[]; drawingReaction?: 'like' | 'dislike' | null } = { drawingReaction: this.room.game.drawingVotes[playerId] ?? null };
     if (this.room.game.currentDrawerId === playerId) {
       if (this.room.game.selectedWord) privateView.selectedWord = this.room.game.selectedWord;
       if (this.room.game.wordChoices.length) privateView.wordChoices = this.room.game.wordChoices;
@@ -616,7 +687,7 @@ export class RoomDurableObject extends DurableObject<Env> {
     if (!this.room) return;
     for (const socket of this.ctx.getWebSockets()) {
       const playerId = (socket.deserializeAttachment() as SocketAttachment | null)?.playerId;
-      if (playerId) this.send(socket, this.stateMessage(playerId));
+      if (playerId && this.isCurrentSocket(socket)) this.send(socket, this.stateMessage(playerId));
     }
   }
 
@@ -627,7 +698,7 @@ export class RoomDurableObject extends DurableObject<Env> {
 
   private broadcast(message: ServerMessage, except?: WebSocket): void {
     for (const socket of this.ctx.getWebSockets()) {
-      if (socket !== except) this.send(socket, message);
+      if (socket !== except && this.isCurrentSocket(socket)) this.send(socket, message);
     }
   }
 
@@ -661,6 +732,67 @@ export class RoomDurableObject extends DurableObject<Env> {
     if (this.room) await this.ctx.storage.put(ROOM_STORAGE_KEY, this.room);
   }
 
+  private isCurrentSocket(socket: WebSocket): boolean {
+    const attachment = socket.deserializeAttachment() as SocketAttachment | null;
+    return Boolean(attachment?.playerId && this.room?.activeSessionIds[attachment.playerId] === attachment.sessionId);
+  }
+
+  private async expireRoom(): Promise<void> {
+    for (const socket of this.ctx.getWebSockets()) this.close(socket, 4404, 'Room expired');
+    this.room = null;
+    this.nextAlarmAt = null;
+    this.drawingDirty = false;
+    this.chatWindows.clear();
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+  }
+
+  private async leaveRoom(socket: WebSocket, playerId: string): Promise<void> {
+    if (!this.room) return;
+    const now = Date.now();
+    const player = this.room.players[playerId];
+    player.connected = false;
+    player.disconnectedAt = now;
+    delete this.room.activeSessionIds[playerId];
+    if (!this.room.game.leftPlayerIds.includes(playerId)) this.room.game.leftPlayerIds.push(playerId);
+    this.room.lastActivityAt = now;
+    this.addSystemMessage(`${player.name} left the room.`);
+    if (transferAbsentHost(this.room, now, true)) this.addSystemMessage(`${this.room.players[this.room.hostId].name} is now the host.`);
+    pauseEmptyRoom(this.room, now);
+    await this.save();
+    if (!await this.finishIfOnlyPlayerRemains(now)) {
+      this.broadcastState();
+      await this.scheduleNextAlarm();
+    }
+    this.send(socket, { type: 'room:left' });
+    this.close(socket, 1000, 'Left room');
+  }
+
+  private async finishIfOnlyPlayerRemains(now: number): Promise<boolean> {
+    if (!this.room) return false;
+    const game = this.room.game;
+    if (!['WORD_SELECTION', 'DRAWING', 'TURN_RESULTS'].includes(game.phase)) return false;
+    const participants = game.eligiblePlayerIds.map((id) => this.room!.players[id]).filter((player): player is Player => Boolean(player));
+    const present = participants.filter((player) => player.connected && !player.spectator);
+    if (present.length !== 1) return false;
+    if (participants.some((player) => !player.connected && !game.leftPlayerIds.includes(player.id)
+      && player.disconnectedAt !== null && now - player.disconnectedAt < RECONNECT_GRACE_MS)) return false;
+    game.winnerId = present[0].id;
+    game.phase = 'GAME_RESULTS';
+    game.phaseEndsAt = null;
+    game.pausedAt = null;
+    game.currentDrawerId = null;
+    game.selectedWord = null;
+    game.wordChoices = [];
+    game.maskedWord = '';
+    this.addSystemMessage(`${present[0].name} wins as the last remaining player!`);
+    await this.save();
+    this.broadcast({ type: 'sound:event', payload: { sound: 'game-end' } });
+    this.broadcastState();
+    await this.scheduleNextAlarm();
+    return true;
+  }
+
   private async scheduleAlarm(timestamp: number): Promise<void> {
     if (this.nextAlarmAt !== null && this.nextAlarmAt <= timestamp) return;
     this.nextAlarmAt = timestamp;
@@ -672,23 +804,35 @@ export class RoomDurableObject extends DurableObject<Env> {
     const now = Date.now();
     const candidates: number[] = [];
     const game = this.room.game;
+    if (this.room.emptySince !== null) {
+      await this.scheduleAlarm(this.room.emptySince + EMPTY_ROOM_TTL_MS);
+      return;
+    }
     if (game.phaseEndsAt !== null) candidates.push(game.phaseEndsAt);
     if (this.drawingDirty) candidates.push(now + 750);
     for (const player of Object.values(this.room.players)) {
       if (player.connected || player.disconnectedAt === null) continue;
-      candidates.push(player.disconnectedAt + RECONNECT_GRACE_MS);
+      if (['WORD_SELECTION', 'DRAWING', 'TURN_RESULTS'].includes(game.phase) && game.eligiblePlayerIds.includes(player.id)
+        && !game.leftPlayerIds.includes(player.id) && player.disconnectedAt + RECONNECT_GRACE_MS > now) candidates.push(player.disconnectedAt + RECONNECT_GRACE_MS);
+      if (player.id === this.room.hostId && player.disconnectedAt + RECONNECT_GRACE_MS > now) candidates.push(player.disconnectedAt + RECONNECT_GRACE_MS);
       if (player.id === game.currentDrawerId && (game.phase === 'WORD_SELECTION' || game.phase === 'DRAWING')) {
         candidates.push(player.disconnectedAt + DRAWER_RECONNECT_GRACE_MS);
       }
     }
+    for (const socket of this.ctx.getWebSockets()) {
+      if (!socketIsOpen(socket)) continue;
+      const attachment = socket.deserializeAttachment() as SocketAttachment | null;
+      const seenAt = Math.max(attachment?.lastSeenAt ?? now, this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime() ?? 0);
+      candidates.push(seenAt + SOCKET_IDLE_TIMEOUT_MS);
+    }
+    if (game.currentDrawerId && !this.room.players[game.currentDrawerId] && (game.phase === 'DRAWING' || game.phase === 'WORD_SELECTION')) candidates.push(now + 1);
     if (game.phase === 'DRAWING' && game.selectedWord && game.phaseEndsAt !== null && this.room.settings.hints > 0 && this.room.settings.wordMode !== 'HIDDEN') {
       const total = this.room.settings.drawTime * 1_000;
       const possible = Math.min(this.room.settings.hints, getHintRevealOrder(game.selectedWord).length);
       const nextHint = game.revealedIndices.length + 1;
       if (nextHint <= possible) candidates.push(game.phaseEndsAt - total + total * (nextHint / (possible + 1)));
     }
-    if (Object.values(this.room.players).every((player) => !player.connected)) candidates.push(this.room.lastActivityAt + EMPTY_ROOM_TTL_MS);
-    const next = Math.max(now + 1, Math.min(...candidates.filter((candidate) => candidate > now - 5)));
+    const next = Math.max(now + 1, Math.min(...candidates));
     if (Number.isFinite(next)) await this.scheduleAlarm(next);
   }
 }

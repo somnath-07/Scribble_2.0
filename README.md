@@ -8,15 +8,17 @@ There are no accounts, paid APIs, external databases, or application secrets. Pl
 
 - Original player avatar customizer and persistent device identity
 - Secure eight-character private room links
-- Real-time lobby presence, host-only settings, kicking, and local muting
+- Real-time lobby presence, host-only settings, lobby-only kicking, and local muting
 - Server-controlled `WAITING → WORD_SELECTION → DRAWING → TURN_RESULTS → GAME_RESULTS` state machine
 - Private word choices that are sent only to the current drawer
 - Mouse, touch, and stylus drawing on a fixed 800×600 logical canvas
 - Batched brush/eraser strokes, deterministic fill, synchronized undo, and clear
 - Reconnectable canvas command history (never streamed screenshots)
+- One changeable like/dislike per player per drawing, with no self-voting or score effects
 - Public guessing, private close-guess feedback, answer-safe solved-player chat, and rate limits
 - Speed-based guesser points, drawer points, hints, early completion, multiple rounds, and a final podium
-- Reconnect grace, drawer-disconnect handling, host migration, spectators joining mid-game, and one-hour empty-room cleanup
+- Automatic reconnect, score-preserving browser identity, host migration, spectators joining mid-game, and ten-minute empty-room retention
+- Original pixel avatars with top-row hair/headwear, middle-row eyes, bottom-row mouth arrows, and separate body-color controls
 - Responsive desktop, tablet, and mobile layouts, keyboard focus, labels, and drawer hotkeys
 - Optional Web Audio sound cues with a mute control
 - 690+ original, locally stored English prompts plus custom-word support
@@ -48,7 +50,9 @@ src/
   lib/                 Device profile and sound helpers
   styles/              Responsive visual system
 worker/
-  index.ts             HTTP/API routing and one-room-one-object routing
+  index.ts             Worker entrypoint and Durable Object export
+  handler.ts           Shared Worker/Pages HTTP and WebSocket routing
+  room-lifecycle.ts    Empty-room pause, expiration and host transfer
   room.ts              Authoritative Durable Object room
   game-engine.ts       Pure scoring, hints, words, rounds, host migration
   validation.ts        Incoming message and payload validation
@@ -73,10 +77,10 @@ From the project folder:
 
 ```bash
 npm install
-npx playwright install chromium
+npx playwright install firefox webkit
 ```
 
-The second command downloads the browser used by the end-to-end tests. It is not needed just to play the game.
+The second command downloads extra browser engines for compatibility tests. The Chromium project uses installed Google Chrome. Browsers are not needed just to build or deploy the game.
 
 ## Run locally
 
@@ -109,6 +113,7 @@ npm run test         # Unit tests
 npm run test:e2e     # Real multi-context browser tests
 npm run preview      # Preview the production build locally
 npm run deploy       # Build and deploy to Cloudflare
+npm run deploy:pages # Publish the free Pages frontend bound to that Worker
 npm run cf-typegen   # Regenerate Cloudflare binding types if config changes
 ```
 
@@ -131,6 +136,16 @@ The client never submits a score, the next drawer, or an answer result. It can o
 Hibernating WebSockets keep clients connected while allowing an idle room object to sleep. Important room state is stored in the object's small SQLite-backed key/value snapshot. Canvas traffic is kept as validated logical commands; points are batched by the client, merged by stroke ID on the server, and checkpointed without storing image frames.
 
 Timers use `phaseEndsAt` timestamps and Durable Object alarms. Browser intervals only update the visible countdown; they cannot advance a turn or award points.
+
+Switching windows does not deliberately close a connection. On wake, the client checks its connection and reconnects if the browser or network suspended it. A private random reconnect token stays in local storage; the server retains scores for the room's lifetime and never broadcasts that token. Return using the same browser profile and the same site address. Clearing browser data, changing devices or using incognito creates a different player.
+
+When the last player disconnects, the game pauses and preserves scores, drawing and phase time for **10 minutes**. Returning before expiration resumes it. After 10 empty minutes, the room is deleted. Abrupt network loss can take up to two minutes to be detected. If others remain, play continues, a missing drawer gets 30 seconds, and an absent host transfers after 60 seconds; these presence rules do not delete earned points. Starting a new game intentionally resets scores.
+
+Two tabs sharing one identity do not fight over reconnecting: the older tab shows “Playing in another tab” and offers an explicit takeover button.
+
+The top-left logo asks for confirmation before leaving for home. A confirmed departure immediately passes host ownership to the next connected player. A room with even one connected player stays available; the ten-minute expiration starts only when nobody is connected. If all opponents deliberately leave an active game, the remaining participant wins immediately. For network disconnects, opponents have a 60-second reconnect grace period before a last-player win. Retained scores are not erased by a disconnect. Kicking is blocked by the server outside the waiting lobby, including for the host.
+
+Players can like or dislike another player's current drawing while it is being drawn or during its reveal. Selecting the same reaction again clears it; choosing the other reaction replaces it. Reactions synchronize, survive reconnects, reset for each drawing, and never change scores. Final standings use a gold/silver/bronze top-three podium with ranks four onward listed below; spectators are not ranked.
 
 ## Security and privacy
 
@@ -187,12 +202,17 @@ On the first deployment, Wrangler creates the SQLite-backed Durable Object names
 
 ## Deploy and get the live URL
 
+Public game: **[scribble-2-somnath.pages.dev](https://scribble-2-somnath.pages.dev)**.
+
+This is a free Cloudflare Pages address, not a temporary tunnel. It binds directly to the existing `scribble-2` Worker's SQLite Durable Objects. Both API calls and WebSockets use the same Pages origin, so playing does not require the browser to reach `workers.dev`. No paid plan, custom domain, R2 bucket, or external server is required. Free-tier quotas still apply; this is not a promise of unlimited traffic or uptime.
+
 After signing in:
 
 ```bash
 npm run test
 npm run build
 npm run deploy
+npm run deploy:pages
 ```
 
 Wrangler prints a URL similar to:
@@ -203,11 +223,13 @@ https://scribble-2.<your-workers-subdomain>.workers.dev
 
 Open that URL, create a room, and share the complete room URL shown in the lobby. Friends do not need a Cloudflare account.
 
+For Pages, `pages/wrangler.jsonc` binds `ROOMS` to `RoomDurableObject` in `scribble-2`. `scripts/prepare-pages.mjs` prepares the advanced-mode entrypoint and isolates Wrangler's generated config discovery from the Vite Worker build. Always deploy the Worker before Pages. For a fresh account, create a free Pages project with `npx wrangler pages project create scribble-2-somnath --production-branch main` (choose a unique name if taken), and update the Pages name and deploy script accordingly. Set `CLOUDFLARE_ACCOUNT_ID` in the shell when using multiple accounts. Never commit OAuth credentials.
+
 To use a custom domain later, open **Workers & Pages → scribble-2 → Settings → Domains & Routes** in the Cloudflare dashboard and add a domain you already own. A custom domain is optional and may itself cost money; the `workers.dev` address is enough to play.
 
 ## Automated browser verification
 
-`npm run test:e2e` starts or reuses the local app and launches isolated Chromium contexts. The suite verifies:
+`npm run test:e2e` starts or reuses the local app. The full suite runs in installed Chrome; a complete two-player game also runs in Firefox and mobile WebKit. The suite verifies:
 
 - two real browser identities joining one room
 - live player presence and refresh/reconnect
@@ -220,6 +242,23 @@ To use a custom domain later, open **Workers & Pages → scribble-2 → Settings
 - server-authoritative timer expiration
 - mobile viewport rendering
 - absence of critical browser console errors in the main flow
+- 65-second network loss, reload and preserved points
+- focus changes and explicit same-identity tab takeover
+- an empty room restoring its drawing and paused turn
+- missing-room links displaying an actionable error
+- confirmed lobby exit, immediate host handoff, and customization only through its button
+- in-game kick rejection, last-player wins, and synchronized drawing reactions
+- gameplay controls fitting six desktop/mobile viewports and non-duplicated podium rankings
+
+Run the public deployment tests from PowerShell:
+
+```powershell
+$env:PLAYWRIGHT_BASE_URL='https://scribble-2-somnath.pages.dev'
+npm run test:e2e -- --project=chromium --project=webkit-mobile
+node scripts/verify-hosted.mjs https://scribble-2-somnath.pages.dev
+```
+
+The last command is an opt-in, real-time ten-minute hosted check using disposable test rooms. It checks six-minute empty-room score restoration and ten-minute expiry. Unit tests separately cover exact expiration boundaries, runtime reinstantiation, private reconnect credentials, stale sockets, capacity, host transfer, heartbeats and duplicate-score prevention.
 
 Successful runs write visual checkpoints to `test-results/screenshots/`. Test output is intentionally ignored by Git.
 
@@ -227,7 +266,7 @@ Successful runs write visual checkpoints to `test-results/screenshots/`. Test ou
 
 ### The page says it is reconnecting
 
-Confirm the development server is still running and that the room URL has not been edited. Local rooms disappear if `.wrangler/` is removed. Deployed empty rooms expire after about one hour.
+Confirm the development server is still running and that the room URL has not been edited. Local rooms disappear if `.wrangler/` is removed. Deployed empty rooms expire after ten minutes. Use the Pages link above if the Workers hostname is blocked by your network. The app shows a clear error for missing/expired rooms instead of endlessly retrying them.
 
 ### A second tab replaces the first player
 
@@ -236,7 +275,7 @@ Tabs in the same browser profile share the same local player ID. Use an incognit
 ### Browser tests say the executable is missing
 
 ```bash
-npx playwright install chromium
+npx playwright install firefox webkit
 ```
 
 Then run `npm run test:e2e` again.

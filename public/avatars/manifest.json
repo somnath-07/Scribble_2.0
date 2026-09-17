@@ -1,0 +1,191 @@
+{
+  "width": 128,
+  "height": 128,
+  "pixelSize": 2,
+  "base": {
+    "fill": "base-fill.png",
+    "outline": "base-outline.png"
+  },
+  "layers": {
+    "base": {
+      "file": "base.png",
+      "placement": [
+        16,
+        10,
+        96,
+        112
+      ],
+      "sourceBounds": [
+        38,
+        71,
+        237,
+        235
+      ]
+    },
+    "eyes-dots": {
+      "file": "eyes-dots.png",
+      "placement": [
+        42,
+        46,
+        44,
+        12
+      ],
+      "sourceBounds": [
+        95,
+        458,
+        124,
+        36
+      ]
+    },
+    "eyes-glasses": {
+      "file": "eyes-glasses.png",
+      "placement": [
+        26,
+        40,
+        76,
+        34
+      ],
+      "sourceBounds": [
+        364,
+        425,
+        213,
+        93
+      ]
+    },
+    "eyes-patch": {
+      "file": "eyes-patch.png",
+      "placement": [
+        28,
+        36,
+        72,
+        30
+      ],
+      "sourceBounds": [
+        692,
+        415,
+        194,
+        96
+      ]
+    },
+    "eyes-visor": {
+      "file": "eyes-visor.png",
+      "placement": [
+        26,
+        42,
+        76,
+        32
+      ],
+      "sourceBounds": [
+        991,
+        438,
+        213,
+        77
+      ]
+    },
+    "mouth-smile": {
+      "file": "mouth-smile.png",
+      "placement": [
+        44,
+        74,
+        40,
+        16
+      ],
+      "sourceBounds": [
+        93,
+        782,
+        127,
+        62
+      ]
+    },
+    "mouth-open": {
+      "file": "mouth-open.png",
+      "placement": [
+        54,
+        74,
+        20,
+        22
+      ],
+      "sourceBounds": [
+        435,
+        777,
+        71,
+        72
+      ]
+    },
+    "mouth-grin": {
+      "file": "mouth-grin.png",
+      "placement": [
+        42,
+        74,
+        44,
+        22
+      ],
+      "sourceBounds": [
+        706,
+        774,
+        151,
+        75
+      ]
+    },
+    "mouth-moustache": {
+      "file": "mouth-moustache.png",
+      "placement": [
+        40,
+        76,
+        48,
+        16
+      ],
+      "sourceBounds": [
+        999,
+        768,
+        197,
+        67
+      ]
+    },
+    "accessory-headband": {
+      "file": "accessory-headband.png",
+      "placement": [
+        26,
+        10,
+        76,
+        30
+      ],
+      "sourceBounds": [
+        372,
+        982,
+        198,
+        70
+      ]
+    },
+    "accessory-hair": {
+      "file": "accessory-hair.png",
+      "placement": [
+        22,
+        0,
+        84,
+        38
+      ],
+      "sourceBounds": [
+        655,
+        943,
+        253,
+        157
+      ]
+    },
+    "accessory-bandana": {
+      "file": "accessory-bandana.png",
+      "placement": [
+        26,
+        4,
+        96,
+        40
+      ],
+      "sourceBounds": [
+        996,
+        970,
+        239,
+        113
+      ]
+    }
+  }
+}

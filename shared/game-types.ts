@@ -18,9 +18,10 @@ export interface PlayerProfile {
   id: string;
   name: string;
   avatar: AvatarConfig;
+  reconnectToken: string;
 }
 
-export interface Player extends PlayerProfile {
+export interface Player extends Omit<PlayerProfile, 'reconnectToken'> {
   score: number;
   connected: boolean;
   joinedAt: number;
@@ -76,11 +77,15 @@ export interface PublicGameState {
   totalTurns: number;
   currentDrawerId: string | null;
   phaseEndsAt: number | null;
+  pausedAt: number | null;
   maskedWord: string;
   drawingOrder: string[];
   correctGuesserIds: string[];
   canvasCommands: CanvasCommand[];
   lastWord: string | null;
+  winnerId: string | null;
+  drawingLikes: number;
+  drawingDislikes: number;
 }
 
 export interface RoomView {
@@ -96,6 +101,7 @@ export interface RoomView {
 export interface PrivateGameView {
   selectedWord?: string;
   wordChoices?: string[];
+  drawingReaction?: 'like' | 'dislike' | null;
 }
 
 export interface StoredGameState extends PublicGameState {
@@ -103,6 +109,8 @@ export interface StoredGameState extends PublicGameState {
   wordChoices: string[];
   revealedIndices: number[];
   eligiblePlayerIds: string[];
+  leftPlayerIds: string[];
+  drawingVotes: Record<string, 'like' | 'dislike'>;
 }
 
 export interface StoredRoomState {
@@ -117,4 +125,6 @@ export interface StoredRoomState {
   chat: ChatMessage[];
   bannedPlayerIds: string[];
   activeSessionIds: Record<string, string>;
+  playerTokens: Record<string, string>;
+  emptySince: number | null;
 }

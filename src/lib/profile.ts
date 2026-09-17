@@ -1,7 +1,7 @@
 import type { AvatarConfig, PlayerProfile } from '../../shared/game-types';
 
 const PROFILE_KEY = 'scribble2:profile';
-const BODY_COLORS = ['#f6c7a8', '#c98b63', '#7c4a2d', '#fde68a', '#a7f3d0', '#bfdbfe', '#ddd6fe', '#fecdd3'];
+export const BODY_COLORS = ['#f6c7a8', '#c98b63', '#7c4a2d', '#fde68a', '#ff303f', '#a7f3d0', '#21deec', '#bfdbfe', '#ddd6fe', '#fecdd3'];
 
 export function randomAvatar(): AvatarConfig {
   return {
@@ -18,6 +18,10 @@ export function loadProfile(): PlayerProfile | null {
     if (!stored) return null;
     const profile = JSON.parse(stored) as PlayerProfile;
     if (!profile.id || !profile.name || !profile.avatar) return null;
+    if (!profile.reconnectToken) {
+      profile.reconnectToken = crypto.randomUUID();
+      localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+    }
     return profile;
   } catch {
     return null;
@@ -25,10 +29,12 @@ export function loadProfile(): PlayerProfile | null {
 }
 
 export function saveProfile(name: string, avatar: AvatarConfig, existingId?: string): PlayerProfile {
+  const existing = loadProfile();
   const profile: PlayerProfile = {
     id: existingId ?? crypto.randomUUID(),
     name: name.trim().replace(/\s+/g, ' ').slice(0, 20),
     avatar,
+    reconnectToken: existing && existing.id === existingId ? existing.reconnectToken : crypto.randomUUID(),
   };
   localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
   return profile;

@@ -1,6 +1,8 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "scribble-2",
+  "account_id": "fc8e670b219ed1861e1352ed85435572",
+  "workers_dev": true,
   "compatibility_date": "2026-05-22",
   "main": "./worker/index.ts",
   "assets": {

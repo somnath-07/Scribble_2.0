@@ -10,6 +10,8 @@ import type {
 
 export type ClientMessage =
   | { type: 'room:join'; payload: PlayerProfile }
+  | { type: 'room:leave'; payload?: never }
+  | { type: 'drawing:react'; payload: { turnNumber: number; vote: 'like' | 'dislike' | null } }
   | { type: 'room:update-settings'; payload: RoomSettings }
   | { type: 'player:update'; payload: { name: string; avatar: AvatarConfig } }
   | { type: 'player:kick'; payload: { playerId: string } }
@@ -25,7 +27,8 @@ export type ClientMessage =
   | { type: 'chat:message'; payload: { text: string } };
 
 export type ServerMessage =
-  | { type: 'room:state'; payload: { room: RoomView; private: { selectedWord?: string; wordChoices?: string[] } } }
+  | { type: 'room:left'; payload?: never }
+  | { type: 'room:state'; payload: { room: RoomView; private: { selectedWord?: string; wordChoices?: string[]; drawingReaction?: 'like' | 'dislike' | null } } }
   | { type: 'player:joined'; payload: { playerId: string } }
   | { type: 'player:left'; payload: { playerId: string; permanent: boolean } }
   | { type: 'player:updated'; payload: { playerId: string } }

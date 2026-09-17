@@ -62,14 +62,14 @@ test('player can customize their avatar from the mobile lobby and everyone sees 
   await host.getByTestId('customize-avatar').click();
   await expect(host.getByTestId('avatar-editor')).toBeVisible();
   await host.getByLabel('Use body color #7c4a2d').click();
-  await host.getByRole('button', { name: 'Accessory' }).click();
+  await host.getByRole('button', { name: 'Next hair and headwear' }).click();
   await host.screenshot({ path: `${screenshots}/lobby-avatar-customizer.png`, fullPage: true });
   await host.getByTestId('apply-avatar').click();
   await expect(host.getByTestId('avatar-editor')).toBeHidden();
-  await expect(host.getByTestId('player-Avatar Host').locator('circle[fill="#7c4a2d"]')).toBeVisible();
+  await expect(host.getByRole('img', { name: "Avatar Host's avatar" })).toHaveAttribute('data-body', '#7c4a2d');
 
   const guest = await joinInvite(browser, host.url(), 'Avatar Guest');
-  await expect(guest.page.getByTestId('player-Avatar Host').locator('circle[fill="#7c4a2d"]')).toBeVisible();
+  await expect(guest.page.getByRole('img', { name: "Avatar Host's avatar" })).toHaveAttribute('data-body', '#7c4a2d');
   await host.screenshot({ path: `${screenshots}/lobby-mobile.png`, fullPage: true });
   await guest.context.close();
   await hostContext.close();
@@ -183,4 +183,90 @@ test('host transfers to the longest-connected player after reconnect grace', asy
   await expect(second.page.getByTestId('start-game')).toBeVisible({ timeout: 68_000 });
   await expect(second.page.getByText('You’re host')).toBeVisible();
   await second.context.close();
+});
+
+test('earned points survive a real 65-second network loss and a reload', async ({ browser, page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await profileOnHome(page, 'Resilient Host');
+  await page.getByTestId('create-room').click();
+  await expect(page).toHaveURL(/\/room\/[A-Z0-9]{8}$/);
+  const second = await joinInvite(browser, page.url(), 'Resilient Guest');
+  await page.getByLabel('Draw time').selectOption('180');
+  await page.getByTestId('start-game').click();
+  const { drawer, guesser, word } = await chooseDrawer(page, second.page);
+  await guesser.getByTestId('guess-input').fill(word);
+  await guesser.getByTestId('guess-input').press('Enter');
+  const score = guesser.getByTestId('self-score');
+  await expect(score).not.toHaveText('0');
+  const earned = await score.innerText();
+  const playerName = guesser === page ? 'Resilient Host' : 'Resilient Guest';
+  await guesser.context().setOffline(true);
+  await expect(guesser.getByRole('status')).toContainText('score is saved');
+  await expect(drawer.getByTestId(`player-${playerName}`)).toHaveClass(/offline/);
+  await guesser.waitForTimeout(65_000);
+  await guesser.context().setOffline(false);
+  await expect(guesser.locator('.connection-toast')).toHaveCount(0, { timeout: 20_000 });
+  await expect(score).toHaveText(earned);
+  await guesser.reload();
+  await expect(score).toHaveText(earned);
+  await second.context.close();
+});
+
+test('changing focus keeps the player present and same-profile tabs do not reconnect in a loop', async ({ browser, page, context }) => {
+  await page.goto('/');
+  await profileOnHome(page, 'Tab Host');
+  await page.getByTestId('create-room').click();
+  await expect(page).toHaveURL(/\/room\/[A-Z0-9]{8}$/);
+  const second = await joinInvite(browser, page.url(), 'Tab Guest');
+  const other = await context.newPage();
+  await other.goto('about:blank');
+  await other.bringToFront();
+  await expect(second.page.getByTestId('player-Tab Host')).not.toHaveClass(/offline/);
+  await page.bringToFront();
+  await expect(page.getByTestId('player-Tab Host')).toBeVisible();
+  await other.goto(page.url());
+  await expect(other.getByTestId('player-Tab Host')).toBeVisible();
+  await expect(page.getByText('Playing in another tab')).toBeVisible();
+  await page.getByRole('button', { name: 'Continue in this tab' }).click();
+  await expect(page.getByTestId('player-Tab Host')).toBeVisible();
+  await expect(other.getByText('Playing in another tab')).toBeVisible();
+  await page.waitForTimeout(3_000);
+  await expect(page.getByTestId('player-Tab Host')).toBeVisible();
+  await expect(second.page.getByTestId('player-Tab Host')).not.toHaveClass(/offline/);
+  await other.close();
+  await second.context.close();
+});
+
+test('returning to an empty room restores the drawing and unexpired turn', async ({ browser, page }) => {
+  await page.goto('/');
+  await profileOnHome(page, 'Return Host');
+  await page.getByTestId('create-room').click();
+  await expect(page).toHaveURL(/\/room\/[A-Z0-9]{8}$/);
+  const invite = page.url();
+  const second = await joinInvite(browser, invite, 'Return Guest');
+  await page.getByTestId('start-game').click();
+  const { drawer, guesser } = await chooseDrawer(page, second.page);
+  await drawLine(drawer);
+  await expect.poll(() => canvasHasInk(guesser)).toBe(true);
+  await guesser.goto('about:blank');
+  await drawer.goto('about:blank');
+  await page.waitForTimeout(3_000);
+  await drawer.goto(invite);
+  await expect.poll(() => canvasHasInk(drawer)).toBe(true);
+  await expect(drawer.getByLabel('Undo (U)')).toBeEnabled();
+  await guesser.goto(invite);
+  await expect.poll(() => canvasHasInk(guesser)).toBe(true);
+  await second.context.close();
+});
+
+test('expired or missing room links show a useful error instead of endless loading', async ({ page }) => {
+  await page.goto('/');
+  await profileOnHome(page, 'Missing Room');
+  await page.getByTestId('create-room').click();
+  await expect(page).toHaveURL(/\/room\/[A-Z0-9]{8}$/);
+  await page.route('**/api/rooms/ZZZZZZZZ', (route) => route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"ROOM_NOT_FOUND"}' }));
+  await page.goto('/room/ZZZZZZZZ');
+  await expect(page.getByText('Room unavailable')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Go home' })).toBeVisible();
 });

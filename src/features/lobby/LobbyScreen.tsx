@@ -4,7 +4,7 @@ import { DRAW_TIMES } from '../../../shared/constants';
 import type { AvatarConfig, RoomSettings, RoomView } from '../../../shared/game-types';
 import type { ClientMessage } from '../../../shared/protocol';
 import { AvatarCustomizer } from '../../components/AvatarCustomizer';
-import { GameLogo } from '../../components/GameLogo';
+import { RoomHomeButton } from '../../components/RoomHomeButton';
 import { saveProfile } from '../../lib/profile';
 import { PlayerList } from '../players/PlayerList';
 
@@ -60,7 +60,7 @@ export function LobbyScreen({ room, selfId, send, mutedPlayers, onMute }: Props)
   return (
     <main className="room-page lobby-page">
       <header className="room-header">
-        <GameLogo compact />
+        <RoomHomeButton send={send} />
         <div className="lobby-status" aria-label="Lobby status"><span>Waiting</span><strong>{connectedPlayers}/{room.settings.playerLimit}</strong></div>
         <div className="room-code"><LockKeyhole size={15} /><span>Private room</span><strong>{room.roomId}</strong></div>
       </header>
@@ -89,7 +89,7 @@ export function LobbyScreen({ room, selfId, send, mutedPlayers, onMute }: Props)
             <div><p className="eyebrow">Lobby</p><h2><Users /> Players</h2></div>
             <button className="customize-avatar-button" type="button" data-testid="customize-avatar" onClick={openAvatarEditor}><Palette size={16} /> Customize</button>
           </div>
-          <PlayerList players={room.players} hostId={room.hostId} selfId={selfId} isHost={isHost} mutedPlayers={mutedPlayers} onMute={onMute} onKick={(playerId) => send({ type: 'player:kick', payload: { playerId } })} onCustomizeSelf={openAvatarEditor} />
+          <PlayerList players={room.players} hostId={room.hostId} selfId={selfId} isHost={isHost} canKick mutedPlayers={mutedPlayers} onMute={onMute} onKick={(playerId) => send({ type: 'player:kick', payload: { playerId } })} />
           {connectedPlayers < 2 && <div className="waiting-illustration"><div className="orbit"><PencilLine /></div><strong>Waiting for one more friend</strong><small>Share the invite below to get started.</small></div>}
         </aside>
       </div>

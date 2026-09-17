@@ -96,7 +96,7 @@ function RoomExperience({ roomId, profile }: { roomId: string; profile: PlayerPr
   const [muted, setMuted] = useState(() => localStorage.getItem('scribble2:muted') === 'true');
   const [mutedPlayers, setMutedPlayers] = useState<Set<string>>(() => new Set());
   const stableProfile = useMemo(() => profile, [profile]);
-  const { room, privateView, status, notice, send } = useRoomSocket(roomId, stableProfile, muted);
+  const { room, privateView, status, notice, send, retry } = useRoomSocket(roomId, stableProfile, muted);
   const toggleSound = () => setMuted((current) => {
     localStorage.setItem('scribble2:muted', String(!current));
     return !current;
@@ -107,8 +107,9 @@ function RoomExperience({ roomId, profile }: { roomId: string; profile: PlayerPr
     return next;
   });
 
-  if (!room) {
-    return <main className="connection-page"><div className="connection-card panel">{status === 'lost' || status === 'kicked' ? <WifiOff size={38} /> : <LoaderCircle className="spin" size={38} />}<h1>{status === 'kicked' ? 'You were removed' : status === 'lost' ? 'Room unavailable' : 'Joining the room…'}</h1><p>{notice}</p>{(status === 'lost' || status === 'kicked') && <a className="primary-button" href="/">Go home</a>}</div></main>;
+  if (!room || status === 'lost' || status === 'kicked' || status === 'replaced') {
+    const terminal = status === 'lost' || status === 'kicked' || status === 'replaced';
+    return <main className="connection-page"><div className="connection-card panel">{terminal ? <WifiOff size={38} /> : <LoaderCircle className="spin" size={38} />}<h1>{status === 'kicked' ? 'You were removed' : status === 'replaced' ? 'Playing in another tab' : status === 'lost' ? 'Room unavailable' : 'Joining the room…'}</h1><p role="status">{notice}</p>{status === 'replaced' && <button className="primary-button" onClick={retry}>Continue in this tab</button>}{terminal && <a className="secondary-button" href="/">Go home</a>}</div></main>;
   }
 
   return (
@@ -116,7 +117,7 @@ function RoomExperience({ roomId, profile }: { roomId: string; profile: PlayerPr
       {room.game.phase === 'WAITING' && <LobbyScreen room={room} selfId={profile.id} send={send} mutedPlayers={mutedPlayers} onMute={toggleMutePlayer} />}
       {(room.game.phase === 'WORD_SELECTION' || room.game.phase === 'DRAWING' || room.game.phase === 'TURN_RESULTS') && <GameScreen room={room} privateView={privateView} selfId={profile.id} send={send} muted={muted} onToggleSound={toggleSound} mutedPlayers={mutedPlayers} onMutePlayer={toggleMutePlayer} />}
       {room.game.phase === 'GAME_RESULTS' && <ResultsScreen room={room} selfId={profile.id} send={send} />}
-      {status !== 'connected' && <div className="connection-toast"><LoaderCircle className="spin" size={16} /> {notice}</div>}
+      {status !== 'connected' && <div className="connection-toast" role="status"><LoaderCircle className="spin" size={16} /> {notice}</div>}
     </>
   );
 }

@@ -6,4 +6,5 @@ export interface Env {
 export interface SocketAttachment {
   playerId: string | null;
   sessionId: string;
+  lastSeenAt: number;
 }

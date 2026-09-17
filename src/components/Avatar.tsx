@@ -1,32 +1,19 @@
+import type { CSSProperties } from 'react';
 import type { AvatarConfig } from '../../shared/game-types';
 
-interface AvatarProps {
-  avatar: AvatarConfig;
-  size?: number;
-  label?: string;
-}
+const eyes = ['dots', 'glasses', 'patch', 'visor'];
+const mouths = ['smile', 'open', 'grin', 'moustache'];
+const accessories = [null, 'headband', 'hair', 'bandana'];
 
-export function Avatar({ avatar, size = 64, label = 'Player avatar' }: AvatarProps) {
-  const eyeVariants = [
-    <><circle cx="36" cy="44" r="4" /><circle cx="64" cy="44" r="4" /></>,
-    <><path d="M30 44q6-8 12 0" /><path d="M58 44q6-8 12 0" /></>,
-    <><circle cx="36" cy="44" r="6" fill="white" /><circle cx="36" cy="44" r="2" /><circle cx="64" cy="44" r="6" fill="white" /><circle cx="64" cy="44" r="2" /></>,
-    <><path d="M30 39l12 9M42 39l-12 9M58 39l12 9M70 39l-12 9" /></>,
-  ];
-  const mouths = [
-    <path d="M39 64q11 10 22 0" />,
-    <path d="M39 68q11-10 22 0" />,
-    <circle cx="50" cy="66" r="7" />,
-    <path d="M40 66h20" />,
-  ];
+export function Avatar({ avatar, size = 64, label = 'Player avatar' }: { avatar: AvatarConfig; size?: number; label?: string }) {
+  const accessory = accessories[avatar.accessory % accessories.length];
   return (
-    <svg className="avatar" width={size} height={size} viewBox="0 0 100 100" role="img" aria-label={label}>
-      <circle cx="50" cy="53" r="39" fill={avatar.body} stroke="#1f2852" strokeWidth="4" />
-      <g fill="#1f2852" stroke="#1f2852" strokeWidth="4" strokeLinecap="round">{eyeVariants[avatar.eyes % eyeVariants.length]}</g>
-      <g fill="none" stroke="#1f2852" strokeWidth="4" strokeLinecap="round">{mouths[avatar.mouth % mouths.length]}</g>
-      {avatar.accessory % 4 === 1 && <path d="M20 28q30-27 60 0l-6 7H26z" fill="#ff5c5c" stroke="#1f2852" strokeWidth="4" />}
-      {avatar.accessory % 4 === 2 && <path d="M21 23h58l-8 13H29z" fill="#ffd84d" stroke="#1f2852" strokeWidth="4" />}
-      {avatar.accessory % 4 === 3 && <><path d="M18 45h28M54 45h28M46 45h8" stroke="#1f2852" strokeWidth="4" /><circle cx="34" cy="45" r="12" fill="none" stroke="#1f2852" strokeWidth="4" /><circle cx="66" cy="45" r="12" fill="none" stroke="#1f2852" strokeWidth="4" /></>}
-    </svg>
+    <span className="avatar pixel-avatar" style={{ width: size, height: size, '--avatar-color': avatar.body } as CSSProperties} role="img" aria-label={label} data-body={avatar.body}>
+      <span className="avatar-body" />
+      <img src="/avatars/base-outline.png" alt="" draggable={false} />
+      <img src={`/avatars/eyes-${eyes[avatar.eyes % eyes.length]}.png`} alt="" draggable={false} />
+      <img src={`/avatars/mouth-${mouths[avatar.mouth % mouths.length]}.png`} alt="" draggable={false} />
+      {accessory && <img src={`/avatars/accessory-${accessory}.png`} alt="" draggable={false} />}
+    </span>
   );
 }

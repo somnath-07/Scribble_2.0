@@ -22,6 +22,7 @@ function isAvatar(value: unknown): value is AvatarConfig {
 function isProfile(value: unknown): value is PlayerProfile {
   if (!isRecord(value)) return false;
   return isString(value.id, 64) && /^[a-zA-Z0-9-]+$/.test(value.id)
+    && isString(value.reconnectToken, 128) && /^[a-zA-Z0-9_-]{32,128}$/.test(value.reconnectToken)
     && isString(value.name, MAX_NICKNAME_LENGTH) && value.name.trim().length > 0
     && isAvatar(value.avatar);
 }
@@ -63,6 +64,9 @@ export function parseClientMessage(raw: string): ClientMessage | null {
   if (!isRecord(parsed) || typeof parsed.type !== 'string') return null;
   const payload = parsed.payload;
   switch (parsed.type) {
+    case 'drawing:react': return isRecord(payload) && Number.isInteger(payload.turnNumber) && Number(payload.turnNumber) >= 0
+      && (payload.vote === 'like' || payload.vote === 'dislike' || payload.vote === null)
+      ? { type: 'drawing:react', payload: { turnNumber: Number(payload.turnNumber), vote: payload.vote } } : null;
     case 'room:join': return isProfile(payload) ? { type: parsed.type, payload } : null;
     case 'room:update-settings': return isSettings(payload) ? { type: parsed.type, payload: validateSettings(payload) } : null;
     case 'player:update':
@@ -73,6 +77,7 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     case 'draw:stroke': return isStroke(payload) ? { type: parsed.type, payload } : null;
     case 'draw:fill': return isFill(payload) ? { type: parsed.type, payload } : null;
     case 'chat:message': return isRecord(payload) && isString(payload.text, MAX_CHAT_LENGTH) && payload.text.trim().length > 0 ? { type: parsed.type, payload: { text: payload.text.trim() } } : null;
+    case 'room:leave':
     case 'player:ping':
     case 'game:start':
     case 'game:play-again':
